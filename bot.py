@@ -123,18 +123,30 @@ class MySkype(SkypeEventLoop):
                 trigger = " ".join(cmd[3:])
 
                 response_cmd = read_response_cmd(name)
-                response_cmd[name]["trigger"] = trigger
+                triggers = response_cmd[name].setdefault("triggers", [])
+                triggers.append(trigger)
+
+                unique = dict.fromkeys(triggers)
+                triggers.clear()
+                triggers.extend(unique)
+
                 write_response_cmd(response_cmd)
 
             if cmd[:2] == ["rsp", "triggerchat"]:
                 name = cmd[2]
-                chat = "*" if "*" in cmd[3:] else cmd[3:]
+                new_chats = cmd[3:]
 
-                if isinstance(chat, list) and quote is not None:
-                    chat.append(quote["conversation"])
+                if quote is not None:
+                    new_chats.append(quote["conversation"])
 
                 response_cmd = read_response_cmd(name)
-                response_cmd[name]["chat"] = chat
+                chats = response_cmd[name].setdefault("chat", [])
+                chats.extend(new_chats)
+
+                unique = dict.fromkeys(chats)
+                chats.clear()
+                chats.extend(unique)
+
                 write_response_cmd(response_cmd)
 
             if cmd[:2] == ["rsp", "file"]:
