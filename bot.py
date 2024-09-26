@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import re
 from skpy import SkypeEventLoop, SkypeNewMessageEvent, SkypeMsg
 import keyring
 from os import path
@@ -12,7 +13,7 @@ from dateutil import tz
 import traceback
 import logging
 import json
-from typing import NotRequired, Type, TypedDict
+from typing import NotRequired, TypedDict
 
 RESPONSE_COMMANDS_FILE_PATH = path.join(path.dirname(__file__), "response_cmd.json")
 
@@ -83,7 +84,7 @@ class MySkype(SkypeEventLoop):
     def rsp_cmd(self, name: str) -> ResponseCommand:
         return self._rsp_cmds.setdefault(name, {})
 
-    def rsp_chats(self, name: str | None) -> dict[str, ResponseCommands]:
+    def rsp_chats(self, name: str | None = None) -> dict[str, ResponseCommands]:
         if name is not None:
             rsp_cmd = self.rsp_cmd(name)
             return {chat: {name: rsp_cmd} for chat in rsp_cmd.setdefault("chats", [])}
@@ -120,8 +121,8 @@ class MySkype(SkypeEventLoop):
             if msg.startswith("!"):
                 self.handle_self_commands(event, quote, msg)
 
-        if event.msg.chat.id in self.rsp_chats():
-            self.handle_response_triggers(event)
+        if (id := event.msg.chat.id) in (chats := self.rsp_chats()):
+            self.handle_response_triggers(event, chats[id])
 
     def handle_self_commands(
         self, event: SkypeNewMessageEvent, quote: Tag | None, msg: str
@@ -158,7 +159,7 @@ class MySkype(SkypeEventLoop):
 
                 msgs = event.msg.chat.getMsgs()
 
-        if cmd == "info" and quote is not None:
+        if cmd == "quote" and quote is not None:
             event.msg.chat.sendMsg(str(quote), rich=False)
 
         cmd = cmd.split()
@@ -217,8 +218,42 @@ class MySkype(SkypeEventLoop):
         if cmd[:2] == ["rsp", "file"]:
             raise NotImplementedError()
 
-    def handle_response_triggers(self, event: SkypeNewMessageEvent):
-        pass
+    def handle_response_triggers(
+        self, event: SkypeNewMessageEvent, rsp_cmds: ResponseCommands
+    ):
+        quote, msg = parse_skype_msg(event.msg)
+        msg = str(msg)
+
+        for name, rsp_cmd in rsp_cmds.items():
+            triggers = rsp_cmd["triggers"]
+            triggers = map(lambda t: f"({t})", triggers)
+            triggers = "|".join(triggers)
+
+            m = re.search(triggers, msg, re.I)
+            if m is not None:
+                print("<<", name, f"/{triggers}/")
+
+                quote = SkypeMsg.quote(
+                    event.msg.user,
+                    event.msg.chat,
+                    event.msg.time.replace(tzinfo=tz.UTC).astimezone(tz.tzlocal()),
+                    m[0],
+                )
+                soup = BeautifulSoup(quote)
+                soup.quote["conversation"] = event.msg.chat.id
+                soup.quote["messageid"] = event.msg.id
+                quote = str(soup)
+                event.msg.chat.sendMsg(quote, rich=True)
+
+                response_quote = rsp_cmd["response"].get("quote")
+                if response_quote is not None:
+                    response = json.loads(response_quote)
+                    event.msg.chat.sendMsg(response, rich=True)
+
+                response_file = rsp_cmd["response"].get("file")
+                if response_file is not None:
+                    path = json.loads(response_file)
+                    event.msg.chat.sendFile(path)
 
 
 def main():
