@@ -65,92 +65,102 @@ def write_response_cmd(response_cmd: dict):
 
 class MySkype(SkypeEventLoop):
     def onEvent(self, event):
-        if isinstance(event, SkypeNewMessageEvent) and event.msg.userId == self.userId:
+        if isinstance(event, SkypeNewMessageEvent):
+            self.handle_new_message_event(event)
+
+    def handle_new_message_event(self, event: SkypeNewMessageEvent):
+        if event.msg.userId == self.userId:
             quote, msg = parse_skype_msg(event.msg)
             msg = str(msg)
 
-            if not msg.startswith("!"):
-                return
+            if msg.startswith("!"):
+                self.handle_self_commands(event, quote, msg)
 
-            print(msg)
-            cmd = msg[1:]
+    def handle_self_commands(
+        self, event: SkypeNewMessageEvent, quote: Tag | None, msg: str
+    ):
+        print(">> ", msg)
+        cmd = msg[1:]
 
-            event.msg.delete()
+        event.msg.delete()
 
-            if (
-                cmd == "del"
-                and quote is not None
-                and quote["conversation"] == event.msg.chat.id
-            ):
-                msgs = event.msg.chat.getMsgs()
-                cmd_idx = next(i for i, x in enumerate(msgs) if x.id == event.msg.id)
-                msgs = msgs[cmd_idx:]
+        if (
+            cmd == "del"
+            and quote is not None
+            and quote["conversation"] == event.msg.chat.id
+        ):
+            msgs = event.msg.chat.getMsgs()
+            cmd_idx = next(i for i, x in enumerate(msgs) if x.id == event.msg.id)
+            msgs = msgs[cmd_idx:]
 
-                done = False
+            done = False
 
-                while True:
-                    for msg in msgs:
-                        if msg.time.replace(tzinfo=tz.UTC) >= datetime.fromtimestamp(
-                            int(quote["timestamp"]), tz.tzlocal()
-                        ):
-                            msg.delete()
+            while True:
+                for msg in msgs:
+                    if msg.time.replace(tzinfo=tz.UTC) >= datetime.fromtimestamp(
+                        int(quote["timestamp"]), tz.tzlocal()
+                    ):
+                        msg.delete()
 
-                        if msg.id == quote["messageid"]:
-                            done = True
-                            break
-
-                    if done:
+                    if msg.id == quote["messageid"]:
+                        done = True
                         break
 
-                    msgs = event.msg.chat.getMsgs()
+                if done:
+                    break
 
-            if cmd == "info" and quote is not None:
-                event.msg.chat.sendMsg(str(quote), rich=False)
+                msgs = event.msg.chat.getMsgs()
 
-            cmd = cmd.split()
+        if cmd == "info" and quote is not None:
+            event.msg.chat.sendMsg(str(quote), rich=False)
 
-            if cmd[:2] == ["rsp", "quote"] and quote is not None:
-                name = cmd[2]
+        cmd = cmd.split()
 
-                response_cmd = read_response_cmd(name)
-                rsp = response_cmd[name].setdefault("response", {})
+        if cmd[:2] == ["rsp", "quote"] and quote is not None:
+            name = cmd[2]
 
-                rsp["quote"] = json.dumps(str(quote))
-                write_response_cmd(response_cmd)
+            response_cmd = read_response_cmd(name)
+            rsp = response_cmd[name].setdefault("response", {})
 
-            if cmd[:2] == ["rsp", "trigger"]:
-                name = cmd[2]
-                trigger = " ".join(cmd[3:])
+            rsp["quote"] = json.dumps(str(quote))
+            write_response_cmd(response_cmd)
 
-                response_cmd = read_response_cmd(name)
-                triggers = response_cmd[name].setdefault("triggers", [])
-                triggers.append(trigger)
+        if cmd[:2] == ["rsp", "trigger"]:
+            name = cmd[2]
+            trigger = " ".join(cmd[3:])
 
-                unique = dict.fromkeys(triggers)
-                triggers.clear()
-                triggers.extend(unique)
+            response_cmd = read_response_cmd(name)
+            triggers = response_cmd[name].setdefault("triggers", [])
+            triggers.append(trigger)
 
-                write_response_cmd(response_cmd)
+            unique = dict.fromkeys(triggers)
+            triggers.clear()
+            triggers.extend(unique)
 
-            if cmd[:2] == ["rsp", "triggerchat"]:
-                name = cmd[2]
-                new_chats = cmd[3:]
+            write_response_cmd(response_cmd)
 
-                if quote is not None:
-                    new_chats.append(quote["conversation"])
+        if cmd[:2] == ["rsp", "triggerchat"]:
+            name = cmd[2]
+            new_chats = cmd[3:]
 
-                response_cmd = read_response_cmd(name)
-                chats = response_cmd[name].setdefault("chat", [])
-                chats.extend(new_chats)
+            if quote is not None:
+                new_chats.append(quote["conversation"])
 
-                unique = dict.fromkeys(chats)
-                chats.clear()
-                chats.extend(unique)
+            response_cmd = read_response_cmd(name)
+            chats = response_cmd[name].setdefault("chat", [])
+            chats.extend(new_chats)
 
-                write_response_cmd(response_cmd)
+            unique = dict.fromkeys(chats)
+            chats.clear()
+            chats.extend(unique)
 
-            if cmd[:2] == ["rsp", "file"]:
-                raise NotImplementedError()
+            write_response_cmd(response_cmd)
+
+        if cmd[:2] == ["rsp", "file"]:
+            raise NotImplementedError()
+
+    def handle_response_triggers(self, event: SkypeNewMessageEvent):
+        pass
 
 
 def main():
