@@ -4,6 +4,7 @@ import re
 from skpy import SkypeEventLoop, SkypeNewMessageEvent, SkypeMsg
 import keyring
 from os import path
+from pathlib import Path
 import os
 import signal
 import atexit
@@ -51,7 +52,13 @@ class ResponseCommand(TypedDict):
 
     class Response(TypedDict):
         quote: NotRequired[str]
-        file: NotRequired[str]
+
+        class File(TypedDict):
+            path: str
+            name: NotRequired[str]
+            is_image: NotRequired[bool]
+
+        file: NotRequired[File]
 
     response: Response
 
@@ -215,9 +222,6 @@ class MySkype(SkypeEventLoop):
 
             self.save_rsp_cmd(name)
 
-        if cmd[:2] == ["rsp", "file"]:
-            raise NotImplementedError()
-
     def handle_response_triggers(
         self, event: SkypeNewMessageEvent, rsp_cmds: ResponseCommands
     ):
@@ -252,8 +256,12 @@ class MySkype(SkypeEventLoop):
 
                 response_file = rsp_cmd["response"].get("file")
                 if response_file is not None:
-                    path = json.loads(response_file)
-                    event.msg.chat.sendFile(path)
+                    path = response_file["path"]
+                    name = response_file.get("name", Path(path).stem)
+                    is_image = response_file.get("is_image", False)
+
+                    with open(path, "rb") as f:
+                        event.msg.chat.sendFile(f, name, is_image)
 
 
 def main():
