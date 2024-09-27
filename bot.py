@@ -40,7 +40,7 @@ def handle_program_singleton():
 
 
 def parse_skype_msg(skype_msg: SkypeMsg) -> tuple[None | Tag, BeautifulSoup]:
-    msg = BeautifulSoup(skype_msg.content)
+    msg = BeautifulSoup(skype_msg.content, "html.parser")
     tag = next(msg.children)
 
     return tag.extract() if tag.name == "quote" else None, msg
@@ -243,7 +243,7 @@ class MySkype(SkypeEventLoop):
                     event.msg.time.replace(tzinfo=tz.UTC).astimezone(tz.tzlocal()),
                     m[0],
                 )
-                soup = BeautifulSoup(quote)
+                soup = BeautifulSoup(quote, "html.parser")
                 soup.quote["conversation"] = event.msg.chat.id
                 soup.quote["messageid"] = event.msg.id
                 quote = str(soup)
