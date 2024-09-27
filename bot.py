@@ -263,11 +263,6 @@ class MySkype(SkypeEventLoop):
 
                 rsp = rsp_cmd.setdefault("response", {})
 
-                quote = rsp.get("quote")
-                if quote is not None:
-                    quote = json.loads(quote)
-                    event.msg.chat.sendMsg(quote, rich=True)
-
                 file = rsp.get("file")
                 if file is not None:
                     path = file["path"]
@@ -276,6 +271,11 @@ class MySkype(SkypeEventLoop):
 
                     with open(path, "rb") as f:
                         event.msg.chat.sendFile(f, name, is_image)
+
+                quote = rsp.get("quote")
+                if quote is not None:
+                    quote = json.loads(quote)
+                    event.msg.chat.sendMsg(quote, rich=True)
 
 
 def main():
