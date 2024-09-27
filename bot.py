@@ -86,7 +86,7 @@ def write_response_cmds(rsp_cmds: ResponseCommands):
 class MySkype(SkypeEventLoop):
     def merge_to_rsp_chats(self, changed_rsp_chats: dict[str, ResponseCommands]):
         for chat, rsp_cmds in changed_rsp_chats.items():
-            self._rsp_chats[chat] = self._rsp_chats.setdefault(chat, {}) | rsp_cmds
+            self._rsp_chats[chat] = self._rsp_chats.get(chat, {}) | rsp_cmds
 
     def rsp_cmd(self, name: str) -> ResponseCommand:
         return self._rsp_cmds.setdefault(name, {})
@@ -94,7 +94,7 @@ class MySkype(SkypeEventLoop):
     def rsp_chats(self, name: str | None = None) -> dict[str, ResponseCommands]:
         if name is not None:
             rsp_cmd = self.rsp_cmd(name)
-            return {chat: {name: rsp_cmd} for chat in rsp_cmd.setdefault("chats", [])}
+            return {chat: {name: rsp_cmd} for chat in rsp_cmd.get("chats", [])}
 
         return self._rsp_chats
 
@@ -127,6 +127,7 @@ class MySkype(SkypeEventLoop):
 
             if msg.startswith("!"):
                 self.handle_self_commands(event, quote, msg)
+                return
 
         if (id := event.msg.chat.id) in (chats := self.rsp_chats()):
             self.handle_response_triggers(event, chats[id])
@@ -209,12 +210,16 @@ class MySkype(SkypeEventLoop):
             name = cmd[2]
             new_chats = cmd[3:]
 
-            if quote is not None:
-                new_chats.append(quote["conversation"])
-
             rsp_cmd = self.rsp_cmd(name)
             chats = rsp_cmd.setdefault("chats", [])
-            chats.extend(new_chats)
+
+            if quote or new_chats:
+                if quote is not None:
+                    new_chats.append(quote["conversation"])
+
+                chats.extend(new_chats)
+            else:
+                chats.append(event.msg.chat.id)
 
             unique = dict.fromkeys(chats)
             chats.clear()
@@ -229,7 +234,11 @@ class MySkype(SkypeEventLoop):
         msg = str(msg)
 
         for name, rsp_cmd in rsp_cmds.items():
-            triggers = rsp_cmd["triggers"]
+            triggers = rsp_cmd.setdefault("triggers", [])
+
+            if not triggers:
+                continue
+
             triggers = map(lambda t: f"({t})", triggers)
             triggers = "|".join(triggers)
 
@@ -249,16 +258,18 @@ class MySkype(SkypeEventLoop):
                 quote = str(soup)
                 event.msg.chat.sendMsg(quote, rich=True)
 
-                response_quote = rsp_cmd["response"].get("quote")
-                if response_quote is not None:
-                    response = json.loads(response_quote)
-                    event.msg.chat.sendMsg(response, rich=True)
+                rsp = rsp_cmd.setdefault("response", {})
 
-                response_file = rsp_cmd["response"].get("file")
-                if response_file is not None:
-                    path = response_file["path"]
-                    name = response_file.get("name", Path(path).stem)
-                    is_image = response_file.get("is_image", False)
+                quote = rsp.get("quote")
+                if quote is not None:
+                    quote = json.loads(quote)
+                    event.msg.chat.sendMsg(quote, rich=True)
+
+                file = rsp.get("file")
+                if file is not None:
+                    path = file["path"]
+                    name = file.get("name", Path(path).stem)
+                    is_image = file.get("is_image", False)
 
                     with open(path, "rb") as f:
                         event.msg.chat.sendFile(f, name, is_image)
