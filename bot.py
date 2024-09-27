@@ -40,6 +40,9 @@ def handle_program_singleton():
 
 
 def parse_skype_msg(skype_msg: SkypeMsg) -> tuple[None | Tag, BeautifulSoup]:
+    if not re.search("rich", skype_msg.type, re.I):
+        return None, skype_msg.content
+
     msg = BeautifulSoup(skype_msg.content, "html.parser")
     tag = next(msg.children)
 
