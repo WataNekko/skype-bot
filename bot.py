@@ -329,18 +329,6 @@ class MySkype(SkypeEventLoop):
             if m is not None:
                 print("<<", name, f"/{triggers}/")
 
-                quote = SkypeMsg.quote(
-                    event.msg.user,
-                    event.msg.chat,
-                    event.msg.time.replace(tzinfo=tz.UTC).astimezone(tz.tzlocal()),
-                    m[0],
-                )
-                soup = BeautifulSoup(quote, "html.parser")
-                soup.quote["conversation"] = event.msg.chat.id
-                soup.quote["messageid"] = event.msg.id
-                quote = str(soup)
-                self.sendCmdMsg(event.msg.chat, quote)
-
                 rsp = rsp_cmd.setdefault("response", {})
 
                 raw = rsp.get("raw")
@@ -357,12 +345,23 @@ class MySkype(SkypeEventLoop):
                     with open(path, "rb") as f:
                         event.msg.chat.sendFile(f, name, is_image)
 
-                quote = rsp.get("quote", "")
-                text = rsp.get("text", "")
+                quote = SkypeMsg.quote(
+                    event.msg.user,
+                    event.msg.chat,
+                    event.msg.time.replace(tzinfo=tz.UTC).astimezone(tz.tzlocal()),
+                    m[0],
+                )
+                soup = BeautifulSoup(quote, "html.parser")
+                soup.quote["conversation"] = event.msg.chat.id
+                soup.quote["messageid"] = event.msg.id
+                quote = str(soup)
 
-                response = quote + text
-                if response:
-                    self.sendCmdMsg(event.msg.chat, response)
+                text = rsp.get("text", "")
+                self.sendCmdMsg(event.msg.chat, quote + text)
+
+                quote = rsp.get("quote")
+                if quote:
+                    self.sendCmdMsg(event.msg.chat, quote)
 
 
 def main():
