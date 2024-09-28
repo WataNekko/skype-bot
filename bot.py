@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import re
-from skpy import SkypeEventLoop, SkypeNewMessageEvent, SkypeMsg
+from skpy import SkypeEventLoop, SkypeNewMessageEvent, SkypeMsg, SkypeChat
 import keyring
 from os import path
 from pathlib import Path
@@ -37,16 +37,6 @@ def handle_program_singleton():
         os.remove(pid_cache_path)
 
     atexit.register(delete_pid_cache)
-
-
-def parse_skype_msg(skype_msg: SkypeMsg) -> tuple[None | Tag, BeautifulSoup]:
-    if not re.search("rich", skype_msg.type, re.I):
-        return None, skype_msg.content
-
-    msg = BeautifulSoup(skype_msg.content, "html.parser")
-    tag = next(msg.children)
-
-    return tag.extract() if tag.name == "quote" else None, msg
 
 
 class ResponseCommand(TypedDict):
@@ -95,6 +85,15 @@ def get_rest_after_split(string: str, split: list[str]):
     return string
 
 
+class ParsedMsg:
+    def __init__(
+        self, quote: Tag | None, msg: BeautifulSoup, from_bot: bool = False
+    ) -> None:
+        self.quote = quote
+        self.msg = msg
+        self.from_bot = from_bot
+
+
 class MySkype(SkypeEventLoop):
     def merge_to_rsp_chats(self, changed_rsp_chats: dict[str, ResponseCommands]):
         for chat, rsp_cmds in changed_rsp_chats.items():
@@ -132,23 +131,62 @@ class MySkype(SkypeEventLoop):
         if isinstance(event, SkypeNewMessageEvent):
             self.handle_new_message_event(event)
 
-    def handle_new_message_event(self, event: SkypeNewMessageEvent):
-        if event.msg.userId == self.userId:
-            quote, msg = parse_skype_msg(event.msg)
-            msg = msg.text
+    def _custom_cmd_msg_tag(self):
+        return f"skype-bot:{self.userId}"
 
-            if msg.startswith("!"):
-                self.handle_self_commands(event, quote, msg)
+    def sendCmdMsg(self, chat: SkypeChat, content: str):
+        """Appends a custom cmd tag to end of message before sending, to register correctly when receiving it back."""
+        custom_tag = f"<{self._custom_cmd_msg_tag()}/>"
+        chat.sendMsg(content + custom_tag, rich=True)
+
+    def parse_skype_msg(self, skype_msg: SkypeMsg) -> ParsedMsg | None:
+        if skype_msg.type == "Text":
+            return ParsedMsg(None, skype_msg.content)
+
+        if skype_msg.type != "RichText":
+            return None
+
+        msg = BeautifulSoup(skype_msg.content, "html.parser")
+        first_tag = next(msg.children)
+
+        quote = None
+        if first_tag.name == "quote":
+            quote = first_tag.extract()
+            for quote_cmd_tag in quote.find_all(f"{self._custom_cmd_msg_tag()}"):
+                quote_cmd_tag.extract()
+
+        cmd_tags = [
+            tag.extract() for tag in msg.find_all(f"{self._custom_cmd_msg_tag()}")
+        ]
+
+        return ParsedMsg(
+            quote,
+            msg,
+            from_bot=bool(cmd_tags),
+        )
+
+    def handle_new_message_event(self, event: SkypeNewMessageEvent):
+        parsed = self.parse_skype_msg(event.msg)
+
+        if not parsed or parsed.from_bot:
+            return
+
+        if event.msg.userId == self.userId:
+            msg_txt = parsed.msg.text
+
+            if msg_txt.startswith("!"):
+                print(">>", msg_txt)
+                cmd = msg_txt[1:]
+
+                self.handle_self_commands(event, parsed.quote, cmd)
                 return
 
         if (id := event.msg.chat.id) in (chats := self.rsp_chats()):
-            self.handle_response_triggers(event, chats[id])
+            self.handle_response_triggers(event, chats[id], parsed.msg)
 
     def handle_self_commands(
-        self, event: SkypeNewMessageEvent, quote: Tag | None, msg: str
+        self, event: SkypeNewMessageEvent, quote: Tag | None, cmd_txt: str
     ):
-        print(">>", msg)
-        cmd_txt = msg[1:]
         cmd = cmd_txt.split()
 
         event.msg.delete()
@@ -181,18 +219,21 @@ class MySkype(SkypeEventLoop):
                 msgs = event.msg.chat.getMsgs()
 
         elif cmd_txt == "quote" and quote is not None:
-            event.msg.chat.sendMsg(str(quote), rich=False)
+            soup = BeautifulSoup()
+            soup.string = str(quote)
+            self.sendCmdMsg(event.msg.chat, SkypeMsg.mono(soup))
 
         elif cmd[:2] == ["rsp", "reload"]:
             self.reset_rsp_cmd()
 
         elif cmd[:2] == ["rsp", "print"]:
-            event.msg.chat.sendMsg(
-                "_rsp_cmds = " + json.dumps(self._rsp_cmds, indent=4)
-            )
-            event.msg.chat.sendMsg(
-                "_rsp_chats = " + json.dumps(self._rsp_chats, indent=4)
-            )
+            soup = BeautifulSoup()
+
+            soup.string = "_rsp_cmds = " + json.dumps(self._rsp_cmds, indent=2)
+            self.sendCmdMsg(event.msg.chat, SkypeMsg.mono(soup))
+
+            soup.string = "_rsp_chats = " + json.dumps(self._rsp_chats, indent=2)
+            self.sendCmdMsg(event.msg.chat, SkypeMsg.mono(soup))
 
         elif cmd[:2] == ["rsp", "quote"] and quote is not None:
             name = cmd[2]
@@ -268,9 +309,11 @@ class MySkype(SkypeEventLoop):
             self.save_rsp_cmd(name)
 
     def handle_response_triggers(
-        self, event: SkypeNewMessageEvent, rsp_cmds: ResponseCommands
+        self,
+        event: SkypeNewMessageEvent,
+        rsp_cmds: ResponseCommands,
+        msg: BeautifulSoup,
     ):
-        quote, msg = parse_skype_msg(event.msg)
         msg = str(msg)
 
         for name, rsp_cmd in rsp_cmds.items():
@@ -296,7 +339,7 @@ class MySkype(SkypeEventLoop):
                 soup.quote["conversation"] = event.msg.chat.id
                 soup.quote["messageid"] = event.msg.id
                 quote = str(soup)
-                event.msg.chat.sendMsg(quote, rich=True)
+                self.sendCmdMsg(event.msg.chat, quote)
 
                 rsp = rsp_cmd.setdefault("response", {})
 
@@ -319,7 +362,7 @@ class MySkype(SkypeEventLoop):
 
                 response = quote + text
                 if response:
-                    event.msg.chat.sendMsg(response, rich=True)
+                    self.sendCmdMsg(event.msg.chat, response)
 
 
 def main():
