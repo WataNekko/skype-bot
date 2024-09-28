@@ -63,6 +63,7 @@ class ResponseCommand(TypedDict):
             is_image: NotRequired[bool]
 
         file: NotRequired[File]
+        raw: NotRequired[dict[str, dict]]
 
     response: Response
 
@@ -134,7 +135,7 @@ class MySkype(SkypeEventLoop):
     def handle_new_message_event(self, event: SkypeNewMessageEvent):
         if event.msg.userId == self.userId:
             quote, msg = parse_skype_msg(event.msg)
-            msg = str(msg)
+            msg = msg.text
 
             if msg.startswith("!"):
                 self.handle_self_commands(event, quote, msg)
@@ -179,13 +180,13 @@ class MySkype(SkypeEventLoop):
 
                 msgs = event.msg.chat.getMsgs()
 
-        if cmd_txt == "quote" and quote is not None:
+        elif cmd_txt == "quote" and quote is not None:
             event.msg.chat.sendMsg(str(quote), rich=False)
 
-        if cmd[:2] == ["rsp", "reload"]:
+        elif cmd[:2] == ["rsp", "reload"]:
             self.reset_rsp_cmd()
 
-        if cmd[:2] == ["rsp", "print"]:
+        elif cmd[:2] == ["rsp", "print"]:
             event.msg.chat.sendMsg(
                 "_rsp_cmds = " + json.dumps(self._rsp_cmds, indent=4)
             )
@@ -193,7 +194,7 @@ class MySkype(SkypeEventLoop):
                 "_rsp_chats = " + json.dumps(self._rsp_chats, indent=4)
             )
 
-        if cmd[:2] == ["rsp", "quote"] and quote is not None:
+        elif cmd[:2] == ["rsp", "quote"] and quote is not None:
             name = cmd[2]
 
             rsp_cmd = self.rsp_cmd(name)
@@ -202,7 +203,7 @@ class MySkype(SkypeEventLoop):
             rsp["quote"] = str(quote)
             self.save_rsp_cmd(name)
 
-        if cmd[:2] == ["rsp", "trigger"]:
+        elif cmd[:2] == ["rsp", "trigger"]:
             name = cmd[2]
             trigger = " ".join(cmd[3:])
 
@@ -216,7 +217,7 @@ class MySkype(SkypeEventLoop):
 
             self.save_rsp_cmd(name)
 
-        if cmd[:2] == ["rsp", "triggerchat"]:
+        elif cmd[:2] == ["rsp", "triggerchat"]:
             name = cmd[2]
             new_chats = cmd[3:]
 
@@ -237,7 +238,7 @@ class MySkype(SkypeEventLoop):
 
             self.save_rsp_cmd(name)
 
-        if cmd[:2] == ["rsp", "text"]:
+        elif cmd[:2] == ["rsp", "text"]:
             name = cmd[2]
             text = get_rest_after_split(cmd_txt, cmd[:3]).lstrip()
 
@@ -252,6 +253,19 @@ class MySkype(SkypeEventLoop):
 
                 rsp["text"] = text
                 self.save_rsp_cmd(name)
+
+        elif cmd[:2] == ["rsp", "raw"]:
+            name, raw_id, key = cmd[2:5]
+            value = get_rest_after_split(cmd_txt, cmd[:5]).lstrip()
+
+            rsp_cmd = self.rsp_cmd(name)
+            rsp = rsp_cmd.setdefault("response", {})
+
+            raw = rsp.setdefault("raw", {})
+            raw_rsp = raw.setdefault(raw_id, {})
+            raw_rsp[key] = value
+
+            self.save_rsp_cmd(name)
 
     def handle_response_triggers(
         self, event: SkypeNewMessageEvent, rsp_cmds: ResponseCommands
@@ -286,8 +300,13 @@ class MySkype(SkypeEventLoop):
 
                 rsp = rsp_cmd.setdefault("response", {})
 
+                raw = rsp.get("raw")
+                if raw:
+                    for raw_rsp in raw.values():
+                        event.msg.chat.sendRaw(**raw_rsp)
+
                 file = rsp.get("file")
-                if file is not None:
+                if file:
                     path = file["path"]
                     name = file.get("name", Path(path).stem)
                     is_image = file.get("is_image", False)
