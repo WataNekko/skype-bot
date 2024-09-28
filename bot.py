@@ -55,6 +55,7 @@ class ResponseCommand(TypedDict):
 
     class Response(TypedDict):
         quote: NotRequired[str]
+        text: NotRequired[str]
 
         class File(TypedDict):
             path: str
@@ -84,6 +85,13 @@ def read_response_cmds() -> ResponseCommands:
 def write_response_cmds(rsp_cmds: ResponseCommands):
     with open(RESPONSE_COMMANDS_FILE_PATH, "w") as f:
         json.dump(rsp_cmds, f, indent=2)
+
+
+def get_rest_after_split(string: str, split: list[str]):
+    for s in split:
+        _, string = string.split(s, 1)
+
+    return string
 
 
 class MySkype(SkypeEventLoop):
@@ -139,12 +147,13 @@ class MySkype(SkypeEventLoop):
         self, event: SkypeNewMessageEvent, quote: Tag | None, msg: str
     ):
         print(">>", msg)
-        cmd = msg[1:]
+        cmd_txt = msg[1:]
+        cmd = cmd_txt.split()
 
         event.msg.delete()
 
         if (
-            cmd == "del"
+            cmd_txt == "del"
             and quote is not None
             and quote["conversation"] == event.msg.chat.id
         ):
@@ -170,10 +179,8 @@ class MySkype(SkypeEventLoop):
 
                 msgs = event.msg.chat.getMsgs()
 
-        if cmd == "quote" and quote is not None:
+        if cmd_txt == "quote" and quote is not None:
             event.msg.chat.sendMsg(str(quote), rich=False)
-
-        cmd = cmd.split()
 
         if cmd[:2] == ["rsp", "reload"]:
             self.reset_rsp_cmd()
@@ -192,7 +199,7 @@ class MySkype(SkypeEventLoop):
             rsp_cmd = self.rsp_cmd(name)
             rsp = rsp_cmd.setdefault("response", {})
 
-            rsp["quote"] = json.dumps(str(quote))
+            rsp["quote"] = str(quote)
             self.save_rsp_cmd(name)
 
         if cmd[:2] == ["rsp", "trigger"]:
@@ -229,6 +236,22 @@ class MySkype(SkypeEventLoop):
             chats.extend(unique)
 
             self.save_rsp_cmd(name)
+
+        if cmd[:2] == ["rsp", "text"]:
+            name = cmd[2]
+            text = get_rest_after_split(cmd_txt, cmd[:3]).lstrip()
+
+            if not text and quote is not None:
+                text = "".join(
+                    str(e) for e in quote.children if e.name != "legacyquote"
+                )
+
+            if text:
+                rsp_cmd = self.rsp_cmd(name)
+                rsp = rsp_cmd.setdefault("response", {})
+
+                rsp["text"] = text
+                self.save_rsp_cmd(name)
 
     def handle_response_triggers(
         self, event: SkypeNewMessageEvent, rsp_cmds: ResponseCommands
@@ -272,10 +295,12 @@ class MySkype(SkypeEventLoop):
                     with open(path, "rb") as f:
                         event.msg.chat.sendFile(f, name, is_image)
 
-                quote = rsp.get("quote")
-                if quote is not None:
-                    quote = json.loads(quote)
-                    event.msg.chat.sendMsg(quote, rich=True)
+                quote = rsp.get("quote", "")
+                text = rsp.get("text", "")
+
+                response = quote + text
+                if response:
+                    event.msg.chat.sendMsg(response, rich=True)
 
 
 def main():
