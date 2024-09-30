@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 
+import io
 import re
-from skpy import SkypeEventLoop, SkypeNewMessageEvent, SkypeMsg, SkypeChat
+from skpy import (
+    SkypeEventLoop,
+    SkypeNewMessageEvent,
+    SkypeMsg,
+    SkypeChat,
+    SkypeConnection,
+)
 import keyring
 from os import path
-from pathlib import Path
 import os
 import signal
 import atexit
@@ -14,7 +20,8 @@ from dateutil import tz
 import traceback
 import logging
 import json
-from typing import NotRequired, TypedDict
+from typing import IO, NotRequired, TypedDict
+import imagesize
 
 RESPONSE_COMMANDS_FILE_PATH = path.join(path.dirname(__file__), "response_cmd.json")
 
@@ -83,6 +90,46 @@ def get_rest_after_split(string: str, split: list[str]):
         _, string = string.split(s, 1)
 
     return string
+
+
+def send_image_patched(chat: SkypeChat, content: IO, name: str):
+    meta = {
+        "type": "pish/image",
+        "permissions": {f"8:{id}": ["read"] for id in chat.userIds},
+    }
+    objId = chat.skype.conn(
+        "POST",
+        "https://api.asm.skype.com/v1/objects",
+        auth=SkypeConnection.Auth.Authorize,
+        headers={"X-Client-Version": "0/0.0.0.0"},
+        json=meta,
+    ).json()["id"]
+
+    objType = "imgpsh"
+    urlFull = f"https://api.asm.skype.com/v1/objects/{objId}"
+    data = content.read()
+    chat.skype.conn(
+        "PUT",
+        f"{urlFull}/content/{objType}",
+        auth=SkypeConnection.Auth.Authorize,
+        data=data,
+    )
+
+    size = content.tell()
+    width, height = imagesize.get(io.BytesIO(data))
+
+    viewLink = SkypeMsg.link(f"https://api.asm.skype.com/s/i?{objId}")
+    body = SkypeMsg.uriObject(
+        f'{viewLink}<meta type="photo" originalName="{name}"/>',
+        "Picture.1",
+        urlFull + f'" width="{width}" height="{height}',
+        # inject width and height attributes to URIObject as there is no way to add them with the current SkypeMsg API
+        thumb=f"{urlFull}/views/imgt1",
+        OriginalName=name,
+        FileSize=size,
+    )
+
+    return chat.sendRaw(content=body, messagetype="RichText/UriObject")
 
 
 class ParsedMsg:
@@ -339,11 +386,14 @@ class MySkype(SkypeEventLoop):
                 file = rsp.get("file")
                 if file:
                     path = file["path"]
-                    name = file.get("name", Path(path).stem)
+                    name = file.get("name", os.path.basename(path))
                     is_image = file.get("is_image", False)
 
                     with open(path, "rb") as f:
-                        event.msg.chat.sendFile(f, name, is_image)
+                        if is_image:
+                            send_image_patched(event.msg.chat, f, name)
+                        else:
+                            event.msg.chat.sendFile(f, name)
 
                 quote = SkypeMsg.quote(
                     event.msg.user,
