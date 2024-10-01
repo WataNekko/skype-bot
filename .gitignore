@@ -2,3 +2,4 @@
 .pid
 .assets/
 response_cmd.json
+logs/
